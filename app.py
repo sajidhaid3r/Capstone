@@ -162,26 +162,25 @@ def call_gemini_with_fallback(contents, config=None):
     last_exception = None
 
     for index, key in enumerate(API_KEYS):
-    try:
-        client = genai.Client(api_key=key)
-        response = client.models.generate_content(
-            model=MODEL_NAME,
-            contents=contents,
-            config=config,
-        )
-        return response
-    except APIError as e:
-        last_exception = e
-        if getattr(e, "code", None) == 429 or "RESOURCE_EXHAUSTED" in str(e):
-            st.toast(f"⚠️ Key #{index + 1} quota exhausted. Retrying with Key #{index + 2}...", icon="🔄")
+        try:
+            client = genai.Client(api_key=key)
+            response = client.models.generate_content(
+                model=MODEL_NAME,
+                contents=contents,
+                config=config,
+            )
+            return response
+        except APIError as e:
+            last_exception = e
+            if getattr(e, "code", None) == 429 or "RESOURCE_EXHAUSTED" in str(e):
+                st.toast(f"⚠️ Key #{index + 1} quota exhausted. Retrying with Key #{index + 2}...", icon="🔄")
+                continue
+            else:
+                raise GeminiCallError(f"API Error: {e}") from e
+        except Exception as e:
+            last_exception = e
             continue
-        else:
-            raise GeminiCallError(f"API Error: {e}") from e
-    except Exception as e:
-        last_exception = e
-        continue
-
-    raise GeminiCallError(f"All {len(API_KEYS)} API key(s) failed or exceeded quota: {last_exception}")
+        raise GeminiCallError(f"All {len(API_KEYS)} API key(s) failed or exceeded quota: {last_exception}")
 
 
 def detect_ingredients_from_image(image_bytes: bytes, mime_type: str = "image/jpeg") -> list[str]:
