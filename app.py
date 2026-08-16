@@ -164,9 +164,9 @@ def call_gemini_with_fallback(contents, config=None):
     for index, key in enumerate(API_KEYS):
         try:
             client = genai.Client(api_key=key)
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=contents,
+            response = client.interactions.create(
+                model=MODEL_NAME,
+                input=contents,  # Note: parameter name changes from 'contents' to 'input'
                 config=config,
             )
             return response
