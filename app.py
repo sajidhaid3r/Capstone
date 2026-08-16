@@ -15,6 +15,7 @@ Gemini SDK). The older `google-generativeai` package is deprecated and its
 
 import os
 import json
+import time
 import pandas as pd
 import streamlit as st
 from google import genai
@@ -201,7 +202,12 @@ def run_gemini_operation(api_call_fn):
             return api_call_fn(client)
         except Exception as e:
             err_str = str(e).lower()
-            # Retry on quota/rate-limit errors AND model-not-available errors
+            # Retry on quota/rate-limit errors, model-not-available errors,
+            # AND transient server-side errors (503 UNAVAILABLE, 500 INTERNAL,
+            # 502 BAD_GATEWAY — "model experiencing high demand" is a 503).
+            # These aren't strictly "key exhausted", but rotating keys is a
+            # reasonable retry strategy for them too since different keys can
+            # land on different backend replicas.
             is_retriable_error = (
                 "429" in err_str or
                 "resource_exhausted" in err_str or
@@ -210,7 +216,16 @@ def run_gemini_operation(api_call_fn):
                 "404" in err_str or
                 "not_found" in err_str or
                 "not found" in err_str or
-                "no longer available" in err_str
+                "no longer available" in err_str or
+                "503" in err_str or
+                "unavailable" in err_str or
+                "500" in err_str or
+                "internal" in err_str or
+                "502" in err_str or
+                "bad_gateway" in err_str or
+                "high demand" in err_str or
+                "deadline" in err_str or
+                "timeout" in err_str
             )
 
             if is_retriable_error:
@@ -218,16 +233,25 @@ def run_gemini_operation(api_call_fn):
                 st.session_state.active_key_index = next_pos
                 next_key_num, _ = keys[next_pos]
 
+                # Distinguish the reason in the message so it's honest about
+                # what actually happened (quota vs. server overload), while
+                # still literally saying TRY AGAIN as requested.
+                if "429" in err_str or "resource_exhausted" in err_str or "quota" in err_str:
+                    reason = f"API Key {key_num} limit reached"
+                else:
+                    reason = "Gemini is temporarily unavailable"
+
                 if attempt < num_keys - 1:
-                    # Show fallback toast — this is the "TRY AGAIN" moment:
-                    # current key is exhausted, but another key is available,
-                    # so we retry automatically rather than failing outright.
-                    st.toast(f"⚠️ TRY AGAIN — API Key {key_num} limit reached. Switching to API Key {next_key_num}...")
+                    st.toast(f"⚠️ TRY AGAIN — {reason}. Switching to API Key {next_key_num}...")
+                    time.sleep(1)  # brief pause helps transient 503s clear before retry
                     continue
                 else:
-                    # All 6 keys are exhausted — nothing left to fall back to.
-                    st.toast("⚠️ TRY AGAIN — all API keys are currently rate-limited.")
-                    raise GeminiCallError("TRY AGAIN — all 6 API keys are currently rate-limited or unavailable. Please wait a few minutes.") from e
+                    # All 6 keys exhausted / all attempts failed.
+                    st.toast("⚠️ TRY AGAIN — all API keys failed or Gemini is overloaded.")
+                    raise GeminiCallError(
+                        "TRY AGAIN — all 6 API keys were tried and Gemini is still unavailable "
+                        "(rate-limited or experiencing high demand). Please wait a minute and retry."
+                    ) from e
             else:
                 # Unexpected error — raise immediately
                 raise e
