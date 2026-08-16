@@ -270,12 +270,20 @@ and digestion guidance appropriate for this meal type.
 # =============================================================================
 
 def ingredients_to_dataframe(ingredients: list[str]) -> pd.DataFrame:
-    """Wrap a raw ingredient list in a DataFrame for st.data_editor."""
+    """Wrap a raw ingredient list in a DataFrame for st.data_editor.
+
+    Fix 4: always return at least one blank row so the editor stays visible
+    even when all rows have been deleted, letting the user add new items.
+    """
     try:
         clean = [str(i).strip() for i in (ingredients or []) if str(i).strip()]
+        # Keep one empty sentinel row when list is empty so the editor
+        # remains interactable rather than disappearing from the UI.
+        if not clean:
+            clean = [""]
         return pd.DataFrame({"ingredient": clean})
     except Exception:
-        return pd.DataFrame({"ingredient": []})
+        return pd.DataFrame({"ingredient": [""]})
 
 
 def dataframe_to_ingredients(df: pd.DataFrame) -> list[str]:
@@ -363,7 +371,8 @@ def render_recipe_flashcards(recipe: dict, protein_target: float, budget: float,
                 st.markdown(f"- **{s.get('original')} → {s.get('swap')}** — {s.get('reason')}")
 
     # ---- Card 4: Timing & Digestion guidance ----
-    timing = recipe.get("timing_and_digestion", {})
+    # Fix 3: guard against Gemini returning null for optional schema keys.
+    timing = recipe.get("timing_and_digestion") or {}
     if timing:
         with st.container():
             st.subheader("🕐 Timing & Digestion")
@@ -402,6 +411,48 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# ---- Custom Visual Styling Block (Premium Athletic Theme) ----
+st.markdown(
+    """
+    <style>
+    /* Professional dashboard enhancements */
+    html, body, [data-testid="stAppViewContainer"] {
+        font-family: 'Outfit', 'Inter', sans-serif;
+    }
+    /* Emerald-green highlights for metric values */
+    [data-testid="stMetricValue"] {
+        font-weight: 800 !important;
+        font-size: 2.2rem !important;
+        color: #10B981 !important; /* Emerald-500 */
+    }
+    /* Rounded borders and background padding for container cards */
+    div.element-container:has(div.stAlert) {
+        border-radius: 10px !important;
+    }
+    /* Smooth card designs for containers */
+    .chefcoach-card {
+        background-color: #f8fafc;
+        border: 1px solid #e2e8f0;
+        padding: 20px;
+        border-radius: 12px;
+        box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+        margin-bottom: 20px;
+    }
+    /* Dark mode support wrapper */
+    @media (prefers-color-scheme: dark) {
+        .chefcoach-card {
+            background-color: #1e293b;
+            border-color: #334155;
+        }
+        [data-testid="stMetricValue"] {
+            color: #34D399 !important; /* Emerald-400 */
+        }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 # ---- Session state initialization (prevents memory loss on rerun) ----
 if "ingredients" not in st.session_state:
     st.session_state.ingredients = []
@@ -418,6 +469,14 @@ if "show_uploader" not in st.session_state:
 if "chat_log" not in st.session_state:
     # Each entry: {"role": "user"|"assistant", "type": str, "content": any}
     st.session_state.chat_log = []
+# Fix 1: initialize form defaults so protein_target/budget/meal_type are always
+# bound, even on reruns where the sidebar form was never submitted.
+if "protein_target" not in st.session_state:
+    st.session_state.protein_target = 60
+if "budget" not in st.session_state:
+    st.session_state.budget = 150
+if "meal_type" not in st.session_state:
+    st.session_state.meal_type = "Breakfast"
 
 # ---- Chat session management (init) ----
 if "chat_sessions" not in st.session_state:
@@ -536,9 +595,16 @@ st.sidebar.divider()
 # ---- Today's targets form ----
 with st.sidebar.form("target_form"):
     st.subheader("Today's targets")
-    protein_target = st.slider("Protein target (g)", 10, 200, 60, step=5)
-    budget = st.number_input("Budget ceiling (₹)", min_value=0, value=150, step=10)
-    meal_type = st.selectbox("Meal type", ["Breakfast", "Lunch", "Dinner", "Post-workout snack"])
+    # Use session-state values as widget defaults so the form always reflects
+    # the last saved targets after rerun (fixes UnboundLocalError on first load).
+    protein_target = st.slider("Protein target (g)", 10, 200,
+                               value=st.session_state.protein_target, step=5)
+    budget = st.number_input("Budget ceiling (₹)", min_value=0,
+                             value=st.session_state.budget, step=10)
+    meal_type = st.selectbox("Meal type",
+                             ["Breakfast", "Lunch", "Dinner", "Post-workout snack"],
+                             index=["Breakfast", "Lunch", "Dinner", "Post-workout snack"].index(
+                                 st.session_state.meal_type))
     submitted_targets = st.form_submit_button("Save targets", use_container_width=True)
 
 if submitted_targets:
@@ -546,10 +612,6 @@ if submitted_targets:
     st.session_state.budget = budget
     st.session_state.meal_type = meal_type
     st.sidebar.success("Targets saved for this session.")
-
-st.session_state.setdefault("protein_target", protein_target)
-st.session_state.setdefault("budget", budget)
-st.session_state.setdefault("meal_type", meal_type)
 
 if not st.session_state.api_configured:
     st.sidebar.warning("⚠️ Add GEMINI_API_KEY to .env to enable AI features.")
@@ -612,13 +674,13 @@ with tab_camera:
     if not st.session_state.show_camera and not st.session_state.show_uploader:
         col1, col2 = st.columns(2)
         with col1:
+            # Fix 2: state flag is enough — Streamlit reruns automatically;
+            # explicit st.rerun() here caused unnecessary double-render loops.
             if st.button("Capture Picture", use_container_width=True):
                 st.session_state.show_camera = True
-                st.rerun()
         with col2:
             if st.button("Upload Picture", use_container_width=True):
                 st.session_state.show_uploader = True
-                st.rerun()
     elif st.session_state.show_camera:
         photo = st.camera_input("Fridge photo", key="fridge_cam")
         if photo is not None and st.session_state.api_configured:
@@ -637,7 +699,6 @@ with tab_camera:
                         st.error(f"Couldn't analyze that photo: {e}")
         if st.button("Close Camera", use_container_width=True):
             st.session_state.show_camera = False
-            st.rerun()
     elif st.session_state.show_uploader:
         uploaded_file = st.file_uploader("Choose a photo of your fridge", type=["jpg", "jpeg", "png"], key="fridge_upload")
         if uploaded_file is not None and st.session_state.api_configured:
@@ -658,7 +719,6 @@ with tab_camera:
                         st.error(f"Couldn't analyze that photo: {e}")
         if st.button("Close Uploader", use_container_width=True):
             st.session_state.show_uploader = False
-            st.rerun()
 
 with tab_voice:
     st.caption("Say what's in your fridge and your protein target, e.g. "
