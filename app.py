@@ -37,10 +37,10 @@ _load_env_file()
 
 
 # =============================================================================
-# SECTION 1 — GEMINI CLIENT (prompts, schemas, API calls)
+# SECTION 1 — GEMINI CLIENT & FALLBACK ROUTER
 # =============================================================================
 
-MODEL_NAME = "gemini-2.5-flash"  # swap to "gemini-3.6-flash" for the newest GA model
+MODEL_NAME = "gemini-2.5-flash"
 
 SYSTEM_PROMPT = """You are ChefCoach, an expert sports nutritionist and chef AI
 embedded inside the Smart Kitchen Assistant app. You are not a generic chatbot —
@@ -65,9 +65,7 @@ complete protein and pair well with spinach's iron for absorption. Best time:
 protein." — direct, specific, never vague or generic-chatbot-sounding.
 """
 
-# --- Response schemas (native JSON mode — Gemini enforces these directly,
-# no manual markdown-fence stripping needed) --------------------------------
-
+# --- Response schemas ---
 INGREDIENT_LIST_SCHEMA = types.Schema(
     type=types.Type.ARRAY,
     items=types.Schema(type=types.Type.STRING),
@@ -132,42 +130,68 @@ RECIPE_SCHEMA = types.Schema(
 
 
 class GeminiCallError(Exception):
-    """Raised when a Gemini call fails cleanly, so the UI layer can show a
-    friendly st.error instead of letting an uncaught exception crash the app
-    or print a raw traceback to the terminal."""
+    """Raised when a Gemini call fails cleanly across all fallback attempts."""
     pass
 
 
-_client = None
+# Load keys matching GEMINI_API_KEY_1 through GEMINI_API_KEY_6
+API_KEYS = [
+    os.getenv("GEMINI_API_KEY_1"),
+    os.getenv("GEMINI_API_KEY_2"),
+    os.getenv("GEMINI_API_KEY_3"),
+    os.getenv("GEMINI_API_KEY_4"),
+    os.getenv("GEMINI_API_KEY_5"),
+    os.getenv("GEMINI_API_KEY_6"),
+]
+# Fallback to single key if only GEMINI_API_KEY is present
+if not any(API_KEYS) and os.getenv("GEMINI_API_KEY"):
+    API_KEYS = [os.getenv("GEMINI_API_KEY")]
+
+API_KEYS = [k.strip() for k in API_KEYS if k and k.strip()]
 
 
-def configure_gemini(api_key: str):
-    """Initialize the google-genai client (from st.secrets['GEMINI_API_KEY'])."""
-    global _client
-    _client = genai.Client(api_key=api_key)
+def call_gemini_with_fallback(contents, config=None):
+    """
+    Iterates through available API keys until a successful API call is made.
+    Automatically skips keys that hit 429 RESOURCE_EXHAUSTED limits.
+    """
+    if not API_KEYS:
+        raise GeminiCallError("No Gemini API keys found. Check your .env configuration.")
 
+    from google.genai.errors import APIError
+    last_exception = None
 
-def _require_client():
-    if _client is None:
-        raise GeminiCallError("Gemini client not configured — check GEMINI_API_KEY in secrets.")
-    return _client
+    for index, key in enumerate(API_KEYS):
+        try:
+            client = genai.Client(api_key=key)
+            response = client.models.generate_content(
+                model=MODEL_NAME,
+                contents=contents,
+                config=config,
+            )
+            return response
+        except APIError as e:
+            last_exception = e
+            if getattr(e, "code", None) == 429 or "RESOURCE_EXHAUSTED" in str(e):
+                st.toast(f"⚠️ Key #{index + 1} quota exhausted. Retrying with Key #{index + 2}...", icon="🔄")
+                continue
+            else:
+                raise GeminiCallError(f"API Error: {e}") from e
+        except Exception as e:
+            last_exception = e
+            continue
+
+    raise GeminiCallError(f"All {len(API_KEYS)} API key(s) failed or exceeded quota: {last_exception}")
 
 
 def detect_ingredients_from_image(image_bytes: bytes, mime_type: str = "image/jpeg") -> list[str]:
-    """
-    Vision path: fridge photo -> list of detected ingredient names.
-    Request:  [prompt: str, image bytes]
-    Response: JSON array of lowercase ingredient strings (schema-enforced).
-    """
     try:
-        client = _require_client()
         image_part = types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
         prompt = (
             "List every distinct food ingredient visible in this fridge photo. "
             "Return lowercase ingredient names only."
         )
-        response = client.models.generate_content(
-            model=MODEL_NAME,
+        response = call_gemini_with_fallback(
             contents=[prompt, image_part],
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_PROMPT,
@@ -181,19 +205,11 @@ def detect_ingredients_from_image(image_bytes: bytes, mime_type: str = "image/jp
 
 
 def parse_voice_input(audio_bytes: bytes, mime_type: str = "audio/webm") -> dict:
-    """
-    Audio path: spoken ingredients + protein target -> structured dict.
-    Request:  [prompt: str, audio bytes]
-    Response: {"ingredients": [str], "protein_target_g": number|null}
-    """
-    # Defensive check: reject empty/near-empty recordings (accidental tap,
-    # stream cut short) before spending an API call on unusable audio.
-    MIN_AUDIO_BYTES = 2000  # a fraction-of-a-second clip won't clear this
+    MIN_AUDIO_BYTES = 2000
     if not audio_bytes or len(audio_bytes) < MIN_AUDIO_BYTES:
         raise GeminiCallError("Recording was too short or empty — try again and speak for at least 2-3 seconds.")
 
     try:
-        client = _require_client()
         audio_part = types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)
         prompt = (
             "The user is speaking in any language (Hindi, English, or a mix). "
@@ -205,8 +221,7 @@ def parse_voice_input(audio_bytes: bytes, mime_type: str = "audio/webm") -> dict
             "Use the widely recognized English culinary name for every ingredient. "
             "If a protein target isn't mentioned, return null for that field."
         )
-        response = client.models.generate_content(
-            model=MODEL_NAME,
+        response = call_gemini_with_fallback(
             contents=[prompt, audio_part],
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_PROMPT,
@@ -221,18 +236,7 @@ def parse_voice_input(audio_bytes: bytes, mime_type: str = "audio/webm") -> dict
 
 def generate_recipe(ingredients: list[str], protein_target_g: float,
                      budget_inr: float, meal_type: str) -> dict:
-    """
-    Core AI Integration step. Uses f-strings to inject dynamic user context
-    into the prompt, and enforces a strict JSON schema (native response_schema,
-    not manual parsing) so the UI layer can render flashcards deterministically.
-
-    Request:  prompt (f-string with live ingredients/target/budget/meal_type)
-    Response: RECIPE_SCHEMA-shaped JSON — recipe_name, ingredients_used,
-              missing_or_optional_swaps, steps, macros, estimated_cost_inr,
-              timing_and_digestion
-    """
     try:
-        client = _require_client()
         ingredients_str = ", ".join(ingredients) if ingredients else "no ingredients specified"
 
         prompt = f"""
@@ -246,8 +250,7 @@ as possible to the protein target within budget. Suggest at most 2 optional
 swaps if something would meaningfully improve the macro fit. Include timing
 and digestion guidance appropriate for this meal type.
 """
-        response = client.models.generate_content(
-            model=MODEL_NAME,
+        response = call_gemini_with_fallback(
             contents=prompt,
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_PROMPT,
@@ -266,19 +269,12 @@ and digestion guidance appropriate for this meal type.
 
 
 # =============================================================================
-# SECTION 2 — DATA PIPELINE (Pandas DataFrame helpers, defensive checks)
+# SECTION 2 — DATA PIPELINE
 # =============================================================================
 
 def ingredients_to_dataframe(ingredients: list[str]) -> pd.DataFrame:
-    """Wrap a raw ingredient list in a DataFrame for st.data_editor.
-
-    Fix 4: always return at least one blank row so the editor stays visible
-    even when all rows have been deleted, letting the user add new items.
-    """
     try:
         clean = [str(i).strip() for i in (ingredients or []) if str(i).strip()]
-        # Keep one empty sentinel row when list is empty so the editor
-        # remains interactable rather than disappearing from the UI.
         if not clean:
             clean = [""]
         return pd.DataFrame({"ingredient": clean})
@@ -287,19 +283,17 @@ def ingredients_to_dataframe(ingredients: list[str]) -> pd.DataFrame:
 
 
 def dataframe_to_ingredients(df: pd.DataFrame) -> list[str]:
-    """Extract a clean, deduplicated ingredient list back out of an edited DataFrame."""
     try:
         if df is None or "ingredient" not in df.columns:
             return []
         series = df["ingredient"].dropna().astype(str).str.strip()
         series = series[series != ""]
-        return list(dict.fromkeys(series.tolist()))  # de-dupe, preserve order
+        return list(dict.fromkeys(series.tolist()))
     except Exception:
         return []
 
 
 def macros_to_dataframe(macros: dict) -> pd.DataFrame:
-    """Wrap a macros dict {protein_g, carbs_g, fat_g} into chart-ready DataFrame."""
     try:
         return pd.DataFrame({
             "macro": ["Protein", "Carbs", "Fat"],
@@ -314,7 +308,6 @@ def macros_to_dataframe(macros: dict) -> pd.DataFrame:
 
 
 def history_to_dataframe(history: list[dict]) -> pd.DataFrame:
-    """Wrap the session's meal history into a DataFrame for the trend chart."""
     try:
         if not history:
             return pd.DataFrame(columns=["meal_number", "protein_g"]).set_index("meal_number")
@@ -324,17 +317,15 @@ def history_to_dataframe(history: list[dict]) -> pd.DataFrame:
         return pd.DataFrame(columns=["meal_number", "protein_g"]).set_index("meal_number")
 
 
-# SECTION 3 — FLASHCARD UI (rendering the recipe as native Streamlit cards)
 # =============================================================================
-
-
+# SECTION 3 — FLASHCARD UI
+# =============================================================================
 
 def render_recipe_flashcards(recipe: dict, protein_target: float, budget: float, key_suffix: str = "0"):
     if not recipe:
         st.error("The model didn't return a parseable recipe. Try again.")
         return
 
-    # ---- KPI row: st.metric with deltas ----
     macros = recipe.get("macros", {})
     achieved_protein = macros.get("protein_g", 0)
     est_cost = recipe.get("estimated_cost_inr", 0)
@@ -345,33 +336,27 @@ def render_recipe_flashcards(recipe: dict, protein_target: float, budget: float,
     k3.metric("Est. Cost", f"₹{est_cost}", delta=f"₹{budget - est_cost:+.0f} vs budget")
     k4.metric("Carbs / Fat", f"{macros.get('carbs_g', 0)}g / {macros.get('fat_g', 0)}g")
 
-    # ---- Macro bar chart (extra data viz alongside the KPI row) ----
     st.bar_chart(macros_to_dataframe(macros), use_container_width=True)
     render_budget_progress(est_cost, budget)
 
     st.divider()
 
-    # ---- Card 1: Recipe name + ingredients (editable table) ----
     with st.container():
         st.subheader(f'🍳 {recipe.get("recipe_name", "Your Recipe")}')
         ing_df = pd.DataFrame(recipe.get("ingredients_used", []))
         if not ing_df.empty:
             st.data_editor(ing_df, use_container_width=True, hide_index=True, key=f"ingredients_editor_{key_suffix}")
 
-    # ---- Card 2: Steps (expander) ----
     with st.expander("👨‍🍳 Step-by-step method", expanded=True):
         for i, step in enumerate(recipe.get("steps", []), start=1):
             st.markdown(f"**{i}.** {step}")
 
-    # ---- Card 3: Swaps (expander, only if present) ----
     swaps = recipe.get("missing_or_optional_swaps", [])
     if swaps:
         with st.expander("🔁 Optional swaps"):
             for s in swaps:
                 st.markdown(f"- **{s.get('original')} → {s.get('swap')}** — {s.get('reason')}")
 
-    # ---- Card 4: Timing & Digestion guidance ----
-    # Fix 3: guard against Gemini returning null for optional schema keys.
     timing = recipe.get("timing_and_digestion") or {}
     if timing:
         with st.container():
@@ -382,7 +367,6 @@ def render_recipe_flashcards(recipe: dict, protein_target: float, budget: float,
 
 
 def render_budget_progress(estimated_cost: float, budget: float):
-    """Visual progress bar showing spend against budget ceiling."""
     if budget <= 0:
         return
     fraction = min(estimated_cost / budget, 1.0)
@@ -393,7 +377,6 @@ def render_budget_progress(estimated_cost: float, budget: float):
 
 
 def render_history_trend(history: list[dict]):
-    """Line chart of protein achieved over session history."""
     if len(history) < 2:
         return
     st.subheader("📈 Protein trend this session")
@@ -401,7 +384,7 @@ def render_history_trend(history: list[dict]):
 
 
 # =============================================================================
-# SECTION 4 — MAIN APP (Streamlit UI orchestration)
+# SECTION 4 — MAIN APP
 # =============================================================================
 
 st.set_page_config(
@@ -411,25 +394,20 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ---- Custom Visual Styling Block (Premium Athletic Theme) ----
 st.markdown(
     """
     <style>
-    /* Professional dashboard enhancements */
     html, body, [data-testid="stAppViewContainer"] {
         font-family: 'Outfit', 'Inter', sans-serif;
     }
-    /* Emerald-green highlights for metric values */
     [data-testid="stMetricValue"] {
         font-weight: 800 !important;
         font-size: 2.2rem !important;
-        color: #10B981 !important; /* Emerald-500 */
+        color: #10B981 !important;
     }
-    /* Rounded borders and background padding for container cards */
     div.element-container:has(div.stAlert) {
         border-radius: 10px !important;
     }
-    /* Smooth card designs for containers */
     .chefcoach-card {
         background-color: #f8fafc;
         border: 1px solid #e2e8f0;
@@ -438,14 +416,13 @@ st.markdown(
         box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
         margin-bottom: 20px;
     }
-    /* Dark mode support wrapper */
     @media (prefers-color-scheme: dark) {
         .chefcoach-card {
             background-color: #1e293b;
             border-color: #334155;
         }
         [data-testid="stMetricValue"] {
-            color: #34D399 !important; /* Emerald-400 */
+            color: #34D399 !important;
         }
     }
     </style>
@@ -453,24 +430,19 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ---- Session state initialization (prevents memory loss on rerun) ----
+# State initialization
 if "ingredients" not in st.session_state:
     st.session_state.ingredients = []
 if "recipe_data" not in st.session_state:
     st.session_state.recipe_data = None
 if "history" not in st.session_state:
     st.session_state.history = []
-if "api_configured" not in st.session_state:
-    st.session_state.api_configured = False
 if "show_camera" not in st.session_state:
     st.session_state.show_camera = False
 if "show_uploader" not in st.session_state:
     st.session_state.show_uploader = False
 if "chat_log" not in st.session_state:
-    # Each entry: {"role": "user"|"assistant", "type": str, "content": any}
     st.session_state.chat_log = []
-# Fix 1: initialize form defaults so protein_target/budget/meal_type are always
-# bound, even on reruns where the sidebar form was never submitted.
 if "protein_target" not in st.session_state:
     st.session_state.protein_target = 60
 if "budget" not in st.session_state:
@@ -478,29 +450,13 @@ if "budget" not in st.session_state:
 if "meal_type" not in st.session_state:
     st.session_state.meal_type = "Breakfast"
 
-# ---- Chat session management (init) ----
 if "chat_sessions" not in st.session_state:
     st.session_state.chat_sessions = {}
 if "current_chat_id" not in st.session_state:
     st.session_state.current_chat_id = "Chat 1"
 
-# ---- API config ----
-try:
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        try:
-            api_key = st.secrets.get("GEMINI_API_KEY")
-        except Exception:
-            api_key = None
-    if api_key:
-        configure_gemini(api_key)
-        st.session_state.api_configured = True
-    else:
-        st.session_state.api_configured = False
-except Exception:
-    st.session_state.api_configured = False
+st.session_state.api_configured = len(API_KEYS) > 0
 
-# Ensure current chat entry exists
 if st.session_state.current_chat_id not in st.session_state.chat_sessions:
     st.session_state.chat_sessions[st.session_state.current_chat_id] = {
         "ingredients": [],
@@ -519,9 +475,7 @@ st.sidebar.caption("Camera + voice powered meal engineering.")
 
 st.sidebar.divider()
 
-# ---- Create New Chat ----
 if st.sidebar.button("➕  Create New Chat", use_container_width=True, type="primary"):
-    # Save current session into the dict before switching
     st.session_state.chat_sessions[st.session_state.current_chat_id] = {
         "ingredients": st.session_state.ingredients,
         "recipe_data": st.session_state.recipe_data,
@@ -540,7 +494,6 @@ if st.sidebar.button("➕  Create New Chat", use_container_width=True, type="pri
         "show_uploader": False,
         "chat_log": [],
     }
-    # Reset active session vars
     st.session_state.ingredients = []
     st.session_state.recipe_data = None
     st.session_state.history = []
@@ -549,15 +502,12 @@ if st.sidebar.button("➕  Create New Chat", use_container_width=True, type="pri
     st.session_state.chat_log = []
     st.rerun()
 
-# ---- Recent Chats ----
 st.sidebar.subheader("Recent Chats")
-
 chat_keys = list(reversed(list(st.session_state.chat_sessions.keys())))
 with st.sidebar.expander("▼  All sessions", expanded=True):
     for chat_id in chat_keys:
         is_active = (chat_id == st.session_state.current_chat_id)
         session_data = st.session_state.chat_sessions[chat_id]
-        # Build a preview label: show recipe name if available, else ingredient count
         recipe = session_data.get("recipe_data")
         ings = session_data.get("ingredients", [])
         if recipe and recipe.get("recipe_name"):
@@ -567,10 +517,8 @@ with st.sidebar.expander("▼  All sessions", expanded=True):
         else:
             preview = "New session"
         label = f"{'🟢 ' if is_active else ''}{chat_id}"
-        help_txt = preview
-        if st.button(label, key=f"chat_btn_{chat_id}", use_container_width=True, help=help_txt):
+        if st.button(label, key=f"chat_btn_{chat_id}", use_container_width=True, help=preview):
             if not is_active:
-                # Save current state first
                 st.session_state.chat_sessions[st.session_state.current_chat_id] = {
                     "ingredients": st.session_state.ingredients,
                     "recipe_data": st.session_state.recipe_data,
@@ -579,7 +527,6 @@ with st.sidebar.expander("▼  All sessions", expanded=True):
                     "show_uploader": st.session_state.show_uploader,
                     "chat_log": st.session_state.chat_log,
                 }
-                # Load selected session
                 loaded = st.session_state.chat_sessions[chat_id]
                 st.session_state.current_chat_id = chat_id
                 st.session_state.ingredients = loaded.get("ingredients", [])
@@ -592,11 +539,8 @@ with st.sidebar.expander("▼  All sessions", expanded=True):
 
 st.sidebar.divider()
 
-# ---- Today's targets form ----
 with st.sidebar.form("target_form"):
     st.subheader("Today's targets")
-    # Use session-state values as widget defaults so the form always reflects
-    # the last saved targets after rerun (fixes UnboundLocalError on first load).
     protein_target = st.slider("Protein target (g)", 10, 200,
                                value=st.session_state.protein_target, step=5)
     budget = st.number_input("Budget ceiling (₹)", min_value=0,
@@ -614,7 +558,7 @@ if submitted_targets:
     st.sidebar.success("Targets saved for this session.")
 
 if not st.session_state.api_configured:
-    st.sidebar.warning("⚠️ Add GEMINI_API_KEY to .env to enable AI features.")
+    st.sidebar.warning("⚠️ Add GEMINI_API_KEY_1 to .env to enable AI features.")
 
 with st.sidebar.container():
     s1, s2 = st.columns(2)
@@ -622,14 +566,12 @@ with st.sidebar.container():
     s2.metric("Budget", f"₹{st.session_state.budget}")
     st.caption(f"Meal: {st.session_state.meal_type}")
 
-# ---- Main area header ----
 col_title, col_session = st.columns([3, 1])
 with col_title:
     st.title("What’s Brewing on the Cold Shelf?")
 with col_session:
     st.caption(f"🟢 Active Session: {st.session_state.current_chat_id}")
 
-# ---- Chat log display: show full conversation history for the current session ----
 if st.session_state.chat_log:
     st.markdown("### 💬 Session History")
     for i, entry in enumerate(st.session_state.chat_log):
@@ -666,7 +608,6 @@ if st.session_state.chat_log:
                     st.markdown(str(content))
     st.divider()
 
-# ---- Input tabs (vision / audio / manual) ----
 tab_camera, tab_voice, tab_manual = st.tabs(["📷 Scan Fridge", "🎤 Speak It", "✏️ Type Manually"])
 
 with tab_camera:
@@ -674,8 +615,6 @@ with tab_camera:
     if not st.session_state.show_camera and not st.session_state.show_uploader:
         col1, col2 = st.columns(2)
         with col1:
-            # Fix 2: state flag is enough — Streamlit reruns automatically;
-            # explicit st.rerun() here caused unnecessary double-render loops.
             if st.button("Capture Picture", use_container_width=True):
                 st.session_state.show_camera = True
         with col2:
@@ -691,7 +630,6 @@ with tab_camera:
                             photo.getvalue(), mime_type=photo.type or "image/jpeg"
                         )
                         st.session_state.ingredients = detected
-                        # Log to chat history
                         st.session_state.chat_log.append({"role": "user", "type": "text", "content": "📷 Captured a fridge photo"})
                         st.session_state.chat_log.append({"role": "assistant", "type": "ingredients", "content": detected})
                         st.success(f"Detected: {', '.join(detected) if detected else 'nothing recognizable — try a clearer photo'}")
@@ -711,7 +649,6 @@ with tab_camera:
                             uploaded_file.getvalue(), mime_type=mime
                         )
                         st.session_state.ingredients = detected
-                        # Log to chat history
                         st.session_state.chat_log.append({"role": "user", "type": "text", "content": f"📤 Uploaded photo: `{uploaded_file.name}`"})
                         st.session_state.chat_log.append({"role": "assistant", "type": "ingredients", "content": detected})
                         st.success(f"Detected: {', '.join(detected) if detected else 'nothing recognizable — try a clearer photo'}")
@@ -764,7 +701,6 @@ with tab_voice:
                     if parsed.get("protein_target_g"):
                         st.session_state.protein_target = parsed["protein_target_g"]
                     if st.session_state.ingredients:
-                        # Log to chat history
                         st.session_state.chat_log.append({"role": "user", "type": "text", "content": "🎤 Spoke ingredient list"})
                         st.session_state.chat_log.append({"role": "assistant", "type": "ingredients", "content": st.session_state.ingredients})
                         st.success(f"Heard: {', '.join(st.session_state.ingredients)}")
@@ -773,7 +709,7 @@ with tab_voice:
                 except GeminiCallError as e:
                     st.error(f"Couldn't process that recording: {e}")
     elif audio is not None and not st.session_state.api_configured:
-        st.warning("Add your GEMINI_API_KEY to .env to enable voice parsing.")
+        st.warning("Add your GEMINI_API_KEY_1 to .env to enable voice parsing.")
 
 with tab_manual:
     st.caption("Prefer typing? Enter ingredients comma-separated.")
@@ -784,7 +720,6 @@ with tab_manual:
             st.session_state.chat_log.append({"role": "user", "type": "text", "content": f"✏️ Typed ingredients: {manual_text}"})
             st.session_state.chat_log.append({"role": "assistant", "type": "ingredients", "content": st.session_state.ingredients})
 
-# ---- Confirmed ingredients: editable table, generation via st.form only ----
 if st.session_state.ingredients:
     st.divider()
     st.subheader("Confirmed ingredients")
@@ -815,7 +750,6 @@ if st.session_state.ingredients:
                         "meal_number": len(st.session_state.history) + 1,
                         "protein_g": recipe.get("macros", {}).get("protein_g", 0),
                     })
-                    # Log recipe to chat history
                     st.session_state.chat_log.append({
                         "role": "user",
                         "type": "text",
@@ -831,7 +765,6 @@ if st.session_state.ingredients:
                 except GeminiCallError as e:
                     st.error(f"Recipe generation failed: {e}. Please try again.")
 
-# ---- Output: flashcards ----
 if st.session_state.recipe_data:
     st.divider()
     st.subheader("Your recipe")
