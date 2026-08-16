@@ -40,7 +40,7 @@ _load_env_file()
 # SECTION 1 — GEMINI CLIENT & FALLBACK ROUTER
 # =============================================================================
 
-MODEL_NAME = "gemini-2.5-flash"
+MODEL_NAME = "gemini-3.5-flash"
 
 SYSTEM_PROMPT = """You are ChefCoach, an expert sports nutritionist and chef AI
 embedded inside the Smart Kitchen Assistant app. You are not a generic chatbot —
