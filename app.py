@@ -180,7 +180,7 @@ def call_gemini_with_fallback(contents, config=None):
         except Exception as e:
             last_exception = e
             continue
-        raise GeminiCallError(f"All {len(API_KEYS)} API key(s) failed or exceeded quota: {last_exception}")
+raise GeminiCallError(f"All {len(API_KEYS)} API key(s) failed or exceeded quota: {last_exception}")
 
 
 def detect_ingredients_from_image(image_bytes: bytes, mime_type: str = "image/jpeg") -> list[str]:
