@@ -166,7 +166,7 @@ def call_gemini_with_fallback(contents, config=None):
             client = genai.Client(api_key=key)
             response = client.interactions.create(
                 model=MODEL_NAME,
-                input=contents,  # Note: parameter name changes from 'contents' to 'input'
+                contents=contents,
                 config=config,
             )
             return response
