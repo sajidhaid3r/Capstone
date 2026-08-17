@@ -137,7 +137,7 @@ every DataFrame transform.
 `active_key_index` (which Gemini key is currently in rotation).
 
 ## 8. Deployment
-- **Live:** https://capstoneprojecthaid3r.streamlit.app/
+- **Live:** https://capstonehaid3r.streamlit.app/
 - Target: Streamlit Community Cloud
 - Secrets: Gemini key(s) stored in Streamlit Cloud's secrets manager, never
   hardcoded or committed
