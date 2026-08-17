@@ -1049,13 +1049,21 @@ with tab_camera:
     if not st.session_state.show_camera and not st.session_state.show_uploader:
         col1, col2 = st.columns(2)
         with col1:
-            # Fix 2: state flag is enough — Streamlit reruns automatically;
-            # explicit st.rerun() here caused unnecessary double-render loops.
+            # Fix 2 (corrected): a button click triggers exactly ONE script
+            # rerun, and the if/elif chain above was already evaluated
+            # BEFORE this line sets the flag — so without an explicit
+            # st.rerun() here, the camera/uploader widget doesn't appear
+            # until a second, unrelated interaction forces another rerun.
+            # That was the exact cause of the "have to click twice" bug.
+            # Calling st.rerun() immediately re-executes the script with
+            # the flag already set, so the widget appears after one click.
             if st.button("Capture Picture", use_container_width=True):
                 st.session_state.show_camera = True
+                st.rerun()
         with col2:
             if st.button("Upload Picture", use_container_width=True):
                 st.session_state.show_uploader = True
+                st.rerun()
     elif st.session_state.show_camera:
         photo = st.camera_input("Fridge photo", key="fridge_cam")
         if photo is not None and st.session_state.api_configured:
@@ -1074,6 +1082,7 @@ with tab_camera:
                         st.error(f"Couldn't analyze that photo: {e}")
         if st.button("Close Camera", use_container_width=True):
             st.session_state.show_camera = False
+            st.rerun()
     elif st.session_state.show_uploader:
         uploaded_file = st.file_uploader("Choose a photo of your fridge", type=["jpg", "jpeg", "png"], key="fridge_upload")
         if uploaded_file is not None and st.session_state.api_configured:
@@ -1094,6 +1103,7 @@ with tab_camera:
                         st.error(f"Couldn't analyze that photo: {e}")
         if st.button("Close Uploader", use_container_width=True):
             st.session_state.show_uploader = False
+            st.rerun()
 
 with tab_voice:
     st.caption("Say what's in your fridge and your protein target, e.g. "
