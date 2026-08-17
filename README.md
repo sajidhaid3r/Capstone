@@ -9,7 +9,7 @@
  > Camera + voice powered meal engineering, tuned to your macros.
 ```
 
-[![Live App](https://img.shields.io/badge/Streamlit-Live%20App-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white)](https://capstoneprojecthaid3r.streamlit.app/)
+[![Live App](https://img.shields.io/badge/Streamlit-Live%20App-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white)](https://capstonehaid3r.streamlit.app/)
 [![Gemini API](https://img.shields.io/badge/Gemini-8E75B2?style=flat&logo=google&logoColor=white)](https://ai.google.dev)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=flat&logo=python&logoColor=white)](https://python.org)
 
@@ -48,7 +48,7 @@ Feature-wise, this means:
 
 ## `$ live_demo`
 
-🔗 **Live app:** https://capstoneprojecthaid3r.streamlit.app/
+🔗 **Live app:** https://capstonehaid3r.streamlit.app/
 
 ## `$ features --list`
 
@@ -109,7 +109,7 @@ python -m streamlit run app.py
    `GEMINI_API_KEY_1..6` naming, or a single `GEMINI_API_KEY`)
 5. Deploy
 
-**This project is already live:** https://capstoneprojecthaid3r.streamlit.app/
+**This project is already live:** https://capstonehaid3r.streamlit.app/
 
 ## `$ tech_stack`
 
