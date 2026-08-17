@@ -128,6 +128,3 @@ Built by `<YOUR NAME>` for the MirAI School of Technology Capstone.
 
 [![LinkedIn Post](https://img.shields.io/badge/LinkedIn-Submission%20Post-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white)](<PASTE YOUR LINKEDIN POST URL HERE>)
 
-> ⚠️ Per the capstone submission rules, a LinkedIn post tagging MirAI School
-> of Technology is **mandatory**. Paste that post's URL into the badge above
-> before final submission.
