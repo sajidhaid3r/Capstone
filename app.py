@@ -637,6 +637,9 @@ if st.session_state.current_chat_id not in st.session_state.chat_sessions:
         "show_camera": False,
         "show_uploader": False,
         "chat_log": [],
+        "protein_target": 60,
+        "budget": 150,
+        "meal_type": "Breakfast",
     }
 
 # =====================================================================
@@ -657,6 +660,9 @@ if st.sidebar.button("➕  Create New Chat", use_container_width=True, type="pri
         "show_camera": st.session_state.show_camera,
         "show_uploader": st.session_state.show_uploader,
         "chat_log": st.session_state.chat_log,
+        "protein_target": st.session_state.protein_target,
+        "budget": st.session_state.budget,
+        "meal_type": st.session_state.meal_type,
     }
     new_id = f"Chat {len(st.session_state.chat_sessions) + 1}"
     st.session_state.current_chat_id = new_id
@@ -667,6 +673,9 @@ if st.sidebar.button("➕  Create New Chat", use_container_width=True, type="pri
         "show_camera": False,
         "show_uploader": False,
         "chat_log": [],
+        "protein_target": 60,
+        "budget": 150,
+        "meal_type": "Breakfast",
     }
     # Reset active session vars
     st.session_state.ingredients = []
@@ -675,6 +684,9 @@ if st.sidebar.button("➕  Create New Chat", use_container_width=True, type="pri
     st.session_state.show_camera = False
     st.session_state.show_uploader = False
     st.session_state.chat_log = []
+    st.session_state.protein_target = 60
+    st.session_state.budget = 150
+    st.session_state.meal_type = "Breakfast"
     st.rerun()
 
 # ---- Recent Chats ----
@@ -706,6 +718,9 @@ with st.sidebar.expander("▼  All sessions", expanded=True):
                     "show_camera": st.session_state.show_camera,
                     "show_uploader": st.session_state.show_uploader,
                     "chat_log": st.session_state.chat_log,
+                    "protein_target": st.session_state.protein_target,
+                    "budget": st.session_state.budget,
+                    "meal_type": st.session_state.meal_type,
                 }
                 # Load selected session
                 loaded = st.session_state.chat_sessions[chat_id]
@@ -716,6 +731,9 @@ with st.sidebar.expander("▼  All sessions", expanded=True):
                 st.session_state.show_camera = loaded.get("show_camera", False)
                 st.session_state.show_uploader = loaded.get("show_uploader", False)
                 st.session_state.chat_log = loaded.get("chat_log", [])
+                st.session_state.protein_target = loaded.get("protein_target", 60)
+                st.session_state.budget = loaded.get("budget", 150)
+                st.session_state.meal_type = loaded.get("meal_type", "Breakfast")
                 st.rerun()
 
 st.sidebar.divider()
