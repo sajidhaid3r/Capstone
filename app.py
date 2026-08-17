@@ -1,5 +1,5 @@
 """
-Smart Kitchen Assistant — single-file build
+Smart Kitchen Assistant - CodeChef
 ---------------------------------------------
 Camera + voice powered meal-engineering app built for the MirAI Capstone.
 Combines problem statements #11 (Macro Engine), #14 (Fridge-to-Feast), and a
@@ -7,10 +7,6 @@ flashcard-output element inspired by #8 (Voice-Notes to Flashcards).
 
 Tech stack (strictly per rubric): Streamlit, Gemini API (Vision + Audio),
 Pandas, native Streamlit components only.
-
-SDK note: built on `google-genai` (the current, GA, actively-maintained
-Gemini SDK). The older `google-generativeai` package is deprecated and its
-2.0-series models have been shut down — do not revert to it.
 """
 
 import os
