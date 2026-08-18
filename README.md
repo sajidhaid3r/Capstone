@@ -143,7 +143,7 @@ module responsibility table.
 
 ## `$ author`
 
-Built by `<YOUR NAME>` for the MirAI School of Technology Capstone.
+Built by `<MD SAJID HAIDER>` for the MirAI School of Technology Capstone.
 
 [![LinkedIn Post](https://img.shields.io/badge/LinkedIn-Submission%20Post-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white)](<PASTE YOUR LINKEDIN POST URL HERE>)
 
