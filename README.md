@@ -145,5 +145,4 @@ module responsibility table.
 
 Built by `MD SAJID HAIDER` for the MirAI School of Technology Capstone.
 
-[![LinkedIn Post](https://img.shields.io/badge/LinkedIn-Submission%20Post-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white)]([<https://www.linkedin.com/posts/md-sajid-haider-20869631a_miraischooloftechnology-streamlit-geminiapi-activity-7495319881899319296-e4v6?utm_source=share&utm_medium=member_android&rcm=ACoAAFDnKqgBO8wkGOAz1vDVxmwd53teqj0jXkI>])
-
+[![LinkedIn Post](https://img.shields.io/badge/LinkedIn-Submission%20Post-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/posts/md-sajid-haider-20869631a_miraischooloftechnology-streamlit-geminiapi-activity-7495319881899319296-e4v6?utm_source=share&utm_medium=member_android&rcm=ACoAAFDnKqgBO8wkGOAz1vDVxmwd53teqj0jXkI)
